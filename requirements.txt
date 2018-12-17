@@ -1,0 +1,4 @@
+geocoder
+html_table_extractor
+requests
+beautifulsoup4
