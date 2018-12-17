@@ -46,7 +46,6 @@ def getLocation(provinceId, locationId):
             raise ValueError('Error solicitando localizacion e informacion.')
         for item in json.loads(res.text):
             dicted.append(list(item.values()))
-        print(dicted)
         return dicted
     except Exception as e:
         print(e)
