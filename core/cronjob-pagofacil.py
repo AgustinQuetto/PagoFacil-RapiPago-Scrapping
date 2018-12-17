@@ -1,7 +1,7 @@
 import time
 import os
  
-def startCronjob(time):
+def startCronjob():
 	os.system("echo ----------------------------------------------------------")
 	os.system("echo ------------------------running---------------------------")
 	os.system("echo -------------------CRONJOB PAGOFACIL----------------------")
@@ -11,7 +11,7 @@ def startCronjob(time):
 	os.system("echo ----------------------------------------------------------")
  
 if __name__ == '__main__':
-    #1209600 = two weeks
+	#1209600 = two weeks
 	while True:
-        startCronjob() 
-        time.sleep(1209600)
+		startCronjob() 
+		time.sleep(1209600)
