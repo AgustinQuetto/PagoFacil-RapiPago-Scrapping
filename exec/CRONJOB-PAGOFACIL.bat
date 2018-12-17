@@ -1,2 +1,2 @@
 cd "%~dp0../core"
-python PagoFacil.py
+python cronjob-pagofacil.py

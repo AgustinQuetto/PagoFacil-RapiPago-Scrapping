@@ -1,2 +1,2 @@
 cd "%~dp0../core"
-python RapiPago.py
+python cronjob-rapipago.py
