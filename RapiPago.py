@@ -46,14 +46,21 @@ def getBranches(provinceId, localidadId, localidadName, extracash=False):
         branches = []
         if content != None:
             for c in content:
-                title = c.select('.text_expand_drop')[0].get_text()
-                address = c.select('.text_expand_drop')[1].get_text()
-                attentionHour = c.select('.text_horarios_drop')[0].get_text().replace('Horarios de atención:', '').replace('\n', '').replace('   ', '')
-                latlngExt = c.find_all('a')
-                latlngExt = str(latlngExt[0])
-                lat = findBetweenR(latlngExt, 'data-lat="', '" data-lng')
-                lng = findBetweenR(latlngExt, 'data-lng="', '" data-marker')
-                branches.append([localidadName, title, address, attentionHour, lat, lng])
+                try:
+                    title = c.select('.text_expand_drop')[0].get_text()
+                    address = c.select('.text_expand_drop')[1].get_text()
+                    attentionHour = c.select('.text_horarios_drop')[0].get_text().replace('Horarios de atención:', '').replace('\n', '').replace('   ', '')
+                    data = [localidadName, title, address, attentionHour]
+                    latlngExt = c.find_all('a')
+                    if len(latlngExt) > 0:
+                        latlngExt = str(latlngExt[0])
+                        lat = findBetweenR(latlngExt, 'data-lat="', '" data-lng')
+                        lng = findBetweenR(latlngExt, 'data-lng="', '" data-marker')
+                        data.append(lat)
+                        data.append(lng)
+                    branches.append(data)
+                except Exception as e:
+                    print(e)
             return branches
         return []
     except Exception as e:
