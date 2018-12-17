@@ -18,11 +18,6 @@ def findBetweenR(s, first, last):
     except ValueError:
         return ""
 
-#permite solicitar a Google Maps las coordenadas de una direccion
-def getCoors(address):
-    g = geocoder.google('')
-    return g.latlng
-
 #si el directorio no existe, lo crea
 def dirs(directory):
     if not os.path.exists(directory):
