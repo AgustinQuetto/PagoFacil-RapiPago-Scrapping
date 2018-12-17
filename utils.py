@@ -1,4 +1,4 @@
-import re, csv, geocoder, os
+import re, csv, os
 
 #escribe a CSV utilizando el path, una lista y opcionalmente la primera fila como cabezal
 def toCSV(file_path, vector, head=False):
