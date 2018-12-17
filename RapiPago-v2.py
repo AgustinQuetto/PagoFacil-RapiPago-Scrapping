@@ -1,6 +1,5 @@
-import json, requests
+import json, requests, geocoder
 from bs4 import BeautifulSoup
-from html_table_extractor.extractor import Extractor
 from utils import *
 
 #solicita las provincias a rapipago y retorna una lista con todas
@@ -36,27 +35,29 @@ def getLocalidades(provinceId):
 
 #solicita las sucursales mediante el id de provincia y localidad, extrayendo cada una del contenido del sitio
 #retorna una lista
-def getBranches(provinceId, localidadId, extracash=False):
+def getBranches(provinceId, localidadId, localidadName, extracash=False):
     try:
         extracash = 'true' if extracash else 'false'
         res = requests.get('https://www.rapipago.com.ar/rapipagoWeb/index.php/resultado_sucursales?prov='+provinceId+'&loc='+localidadId+'&extracash='+extracash)
         if res.status_code != 200:
             raise ValueError('Error solicitando sucursales.') 
         soup = BeautifulSoup(res.text, 'lxml')
-        tableContent = soup.select('.tableizer-table')
-        extractor = Extractor(str(tableContent))
-        extractor.parse()
-        listed = extractor.return_list()
-        return listed
+        content = soup.find_all('div', class_="w-row accordion_content")
+        branches = []
+        if content != None:
+            for c in content:
+                title = c.select('.text_expand_drop')[0].get_text()
+                address = c.select('.text_expand_drop')[1].get_text()
+                attentionHour = c.select('.text_horarios_drop')[0].get_text().replace('Horarios de atención:', '').replace('\n', '').replace('   ', '')
+                latlngExt = c.find_all('a')
+                latlngExt = str(latlngExt[0])
+                lat = findBetweenR(latlngExt, 'data-lat="', '" data-lng')
+                lng = findBetweenR(latlngExt, 'data-lng="', '" data-marker')
+                branches.append([localidadName, title, address, attentionHour, lat, lng])
+            return branches
+        return []
     except Exception as e:
         print(e)
-
-#retorna una nueva lista con los datos finales necesarios de las sucursales extraidas en bruto
-def necessaryBranches(branches):
-    b = []
-    for br in branches:
-        b.append([br[1], br[2], br[3]])
-    return b
 
 #funcion que se llama y contiene la ejecucion del programa
 def run():
@@ -81,12 +82,9 @@ def run():
             toCSV(paths['localidades']+'/Localidad-'+p[1]+'.csv', localidades, ['ID', 'ID-PROVINCIA', 'LOCALIDAD'])
 
             for loc in localidades:
-                branches = getBranches(p[0], loc[0])
-                #header = branches[0]
-                branches.pop(0)
-                necessary = necessaryBranches(branches)
+                branches = getBranches(p[0], loc[0], loc[2])
                 toCSV(paths['sucursales']+'/Sucursales_'+p[1]+'_'+loc[2]+'_RapiPago.csv',
-                        necessary, ['Localidad','Sucursal','Direccion'])
+                        branches, ['Localidad','Sucursal','Direccion', 'Horario', 'Latitud', 'Longitud'])
 
     except Exception as e:
         print(e)
