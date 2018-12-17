@@ -1,4 +1,4 @@
-import json, requests
+import json, requests, time
 from bs4 import BeautifulSoup
 from utils import *
 
@@ -77,6 +77,9 @@ def run():
                     'HS_LAV','HS_SABADO','HS_DOMINGO','LATITUD','LONGITUD'])
 
 try:
+    start_time = time.time()
     run()
+    elapsed_time = time.time() - start_time
+    print(elapsed_time)
 except Exception as e:
     print(e)

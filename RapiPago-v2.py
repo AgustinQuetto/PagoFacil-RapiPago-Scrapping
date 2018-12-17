@@ -1,4 +1,4 @@
-import json, requests, geocoder
+import json, requests, geocoder, time
 from bs4 import BeautifulSoup
 from utils import *
 
@@ -90,6 +90,9 @@ def run():
         print(e)
 
 try:
+    start_time = time.time()
     run()
+    elapsed_time = time.time() - start_time
+    print(elapsed_time)
 except Exception as e:
     print(e)
