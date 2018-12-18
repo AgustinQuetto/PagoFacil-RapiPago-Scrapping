@@ -53,9 +53,10 @@ def getLocation(provinceId, locationId):
 #funcion que se llama y contiene la ejecucion del programa
 def run():
     paths = {
-                'localidades': 'localidades_PagoFacil',
-                'provincias': 'provincias_PagoFacil',
-                'sucursales': 'ArchivosCSV'
+                'files': '..\Files',
+                'localidades': '..\Files\localidades_PagoFacil',
+                'provincias': '..\Files\provincias_PagoFacil',
+                'sucursales': '..\Files\ArchivosCSV'
             }
 
     for d in paths.keys():

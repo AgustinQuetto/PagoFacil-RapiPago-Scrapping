@@ -1,2 +1,2 @@
-cd "%~dp0../core"
-python cronjob-pagofacil.py
+cd "C:\PagoFacil-RapiPago\core"
+call "cronjob-pagofacil.py"

@@ -5,6 +5,7 @@
 #define NSSM_NATIVE_DEPENDONSERVICE _T("DependOnService")
 #define NSSM_NATIVE_DESCRIPTION _T("Description")
 #define NSSM_NATIVE_DISPLAYNAME _T("DisplayName")
+#define NSSM_NATIVE_ENVIRONMENT _T("Environment")
 #define NSSM_NATIVE_IMAGEPATH _T("ImagePath")
 #define NSSM_NATIVE_NAME _T("Name")
 #define NSSM_NATIVE_OBJECTNAME _T("ObjectName")
@@ -37,11 +38,13 @@ typedef struct {
   int additional;
   setting_function_t set;
   setting_function_t get;
+  setting_function_t dump;
 } settings_t;
 
 int set_setting(const TCHAR *, HKEY, settings_t *, value_t *, const TCHAR *);
 int set_setting(const TCHAR *, SC_HANDLE, settings_t *, value_t *, const TCHAR *);
 int get_setting(const TCHAR *, HKEY, settings_t *, value_t *, const TCHAR *);
 int get_setting(const TCHAR *, SC_HANDLE, settings_t *, value_t *, const TCHAR *);
+int dump_setting(const TCHAR *, HKEY, SC_HANDLE, settings_t *);
 
 #endif

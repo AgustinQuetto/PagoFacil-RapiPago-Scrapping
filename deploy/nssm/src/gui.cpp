@@ -1,6 +1,9 @@
 #include "nssm.h"
 
-static enum { NSSM_TAB_APPLICATION, NSSM_TAB_DETAILS, NSSM_TAB_LOGON, NSSM_TAB_DEPENDENCIES, NSSM_TAB_PROCESS, NSSM_TAB_SHUTDOWN, NSSM_TAB_EXIT, NSSM_TAB_IO, NSSM_TAB_ROTATION, NSSM_TAB_ENVIRONMENT, NSSM_NUM_TABS };
+extern const TCHAR *hook_event_strings[];
+extern const TCHAR *hook_action_strings[];
+
+static enum { NSSM_TAB_APPLICATION, NSSM_TAB_DETAILS, NSSM_TAB_LOGON, NSSM_TAB_DEPENDENCIES, NSSM_TAB_PROCESS, NSSM_TAB_SHUTDOWN, NSSM_TAB_EXIT, NSSM_TAB_IO, NSSM_TAB_ROTATION, NSSM_TAB_ENVIRONMENT, NSSM_TAB_HOOKS, NSSM_NUM_TABS } nssm_tabs;
 static HWND tablist[NSSM_NUM_TABS];
 static int selected_tab;
 
@@ -21,6 +24,13 @@ static HWND dialog(const TCHAR *templ, HWND parent, DLGPROC function, LPARAM l) 
 
 static HWND dialog(const TCHAR *templ, HWND parent, DLGPROC function) {
   return dialog(templ, parent, function, 0);
+}
+
+static inline void set_logon_enabled(unsigned char interact_enabled, unsigned char credentials_enabled) {
+  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_INTERACT), interact_enabled);
+  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_USERNAME), credentials_enabled);
+  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD1), credentials_enabled);
+  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD2), credentials_enabled);
 }
 
 int nssm_gui(int resource, nssm_service_t *service) {
@@ -83,15 +93,18 @@ int nssm_gui(int resource, nssm_service_t *service) {
 
     /* Log on tab. */
     if (service->username) {
-      CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_ACCOUNT, IDC_ACCOUNT);
-      SetDlgItemText(tablist[NSSM_TAB_LOGON], IDC_USERNAME, service->username);
-      EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_INTERACT), 0);
-      EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_USERNAME), 1);
-      EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD1), 1);
-      EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD2), 1);
+      if (is_virtual_account(service->name, service->username)) {
+        CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_VIRTUAL_SERVICE, IDC_VIRTUAL_SERVICE);
+        set_logon_enabled(0, 0);
+      }
+      else {
+        CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_VIRTUAL_SERVICE, IDC_ACCOUNT);
+        SetDlgItemText(tablist[NSSM_TAB_LOGON], IDC_USERNAME, service->username);
+        set_logon_enabled(0, 1);
+      }
     }
     else {
-      CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_ACCOUNT, IDC_LOCALSYSTEM);
+      CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_VIRTUAL_SERVICE, IDC_LOCALSYSTEM);
       if (service->type & SERVICE_INTERACTIVE_PROCESS) SendDlgItemMessage(tablist[NSSM_TAB_LOGON], IDC_INTERACT, BM_SETCHECK, BST_CHECKED, 0);
     }
 
@@ -153,6 +166,9 @@ int nssm_gui(int resource, nssm_service_t *service) {
     if (! (service->stop_method & NSSM_STOP_METHOD_TERMINATE)) {
       SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_METHOD_TERMINATE, BM_SETCHECK, BST_UNCHECKED, 0);
     }
+    if (! service->kill_process_tree) {
+      SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_PROCESS_TREE, BM_SETCHECK, BST_UNCHECKED, 0);
+    }
 
     /* Restart tab. */
     SetDlgItemInt(tablist[NSSM_TAB_EXIT], IDC_THROTTLE, service->throttle_delay, 0);
@@ -164,6 +180,7 @@ int nssm_gui(int resource, nssm_service_t *service) {
     SetDlgItemText(tablist[NSSM_TAB_IO], IDC_STDIN, service->stdin_path);
     SetDlgItemText(tablist[NSSM_TAB_IO], IDC_STDOUT, service->stdout_path);
     SetDlgItemText(tablist[NSSM_TAB_IO], IDC_STDERR, service->stderr_path);
+    if (service->timestamp_log) SendDlgItemMessage(tablist[NSSM_TAB_IO], IDC_TIMESTAMP, BM_SETCHECK, BST_CHECKED, 0);
 
     /* Rotation tab. */
     if (service->stdout_disposition == CREATE_ALWAYS) SendDlgItemMessage(tablist[NSSM_TAB_ROTATION], IDC_TRUNCATE, BM_SETCHECK, BST_CHECKED, 0);
@@ -176,6 +193,9 @@ int nssm_gui(int resource, nssm_service_t *service) {
     if (service->rotate_stdout_online || service->rotate_stderr_online) SendDlgItemMessage(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_ONLINE, BM_SETCHECK, BST_CHECKED, 0);
     SetDlgItemInt(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_SECONDS, service->rotate_seconds, 0);
     if (! service->rotate_bytes_high) SetDlgItemInt(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_BYTES_LOW, service->rotate_bytes_low, 0);
+
+    /* Hooks tab. */
+    if (service->hook_share_output_handles) SendDlgItemMessage(tablist[NSSM_TAB_HOOKS], IDC_REDIRECT_HOOK, BM_SETCHECK, BST_CHECKED, 0);
 
     /* Check if advanced settings are in use. */
     if (service->stdout_disposition != service->stderr_disposition || (service->stdout_disposition && service->stdout_disposition != NSSM_STDOUT_DISPOSITION && service->stdout_disposition != CREATE_ALWAYS) || (service->stderr_disposition && service->stderr_disposition != NSSM_STDERR_DISPOSITION && service->stderr_disposition != CREATE_ALWAYS)) popup_message(dlg, MB_OK | MB_ICONWARNING, NSSM_GUI_WARN_STDIO);
@@ -259,13 +279,6 @@ static inline void set_timeout_enabled(unsigned long control, unsigned long depe
   EnableWindow(GetDlgItem(tablist[NSSM_TAB_SHUTDOWN], dependent), enabled);
 }
 
-static inline void set_logon_enabled(unsigned char enabled) {
-  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_INTERACT), ! enabled);
-  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_USERNAME), enabled);
-  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD1), enabled);
-  EnableWindow(GetDlgItem(tablist[NSSM_TAB_LOGON], IDC_PASSWORD2), enabled);
-}
-
 static inline void set_affinity_enabled(unsigned char enabled) {
   EnableWindow(GetDlgItem(tablist[NSSM_TAB_PROCESS], IDC_AFFINITY), enabled);
 }
@@ -274,6 +287,100 @@ static inline void set_rotation_enabled(unsigned char enabled) {
   EnableWindow(GetDlgItem(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_ONLINE), enabled);
   EnableWindow(GetDlgItem(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_SECONDS), enabled);
   EnableWindow(GetDlgItem(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_BYTES_LOW), enabled);
+}
+
+static inline int hook_env(const TCHAR *hook_event, const TCHAR *hook_action, TCHAR *buffer, unsigned long buflen) {
+  return _sntprintf_s(buffer, buflen, _TRUNCATE, _T("NSSM_HOOK_%s_%s"), hook_event, hook_action);
+}
+
+static inline void set_hook_tab(int event_index, int action_index, bool changed) {
+  int first_event = NSSM_GUI_HOOK_EVENT_START;
+  HWND combo;
+  combo = GetDlgItem(tablist[NSSM_TAB_HOOKS], IDC_HOOK_EVENT);
+  SendMessage(combo, CB_SETCURSEL, event_index, 0);
+  combo = GetDlgItem(tablist[NSSM_TAB_HOOKS], IDC_HOOK_ACTION);
+  SendMessage(combo, CB_RESETCONTENT, 0, 0);
+
+  const TCHAR *hook_event = hook_event_strings[event_index];
+  TCHAR *hook_action;
+  int i;
+  switch (event_index + first_event) {
+    case NSSM_GUI_HOOK_EVENT_ROTATE:
+      i = 0;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_ROTATE_PRE));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_PRE;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_ROTATE_POST));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_POST;
+      break;
+
+    case NSSM_GUI_HOOK_EVENT_START:
+      i = 0;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_START_PRE));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_PRE;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_START_POST));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_POST;
+      break;
+
+    case NSSM_GUI_HOOK_EVENT_STOP:
+      i = 0;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_STOP_PRE));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_PRE;
+      break;
+
+    case NSSM_GUI_HOOK_EVENT_EXIT:
+      i = 0;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_EXIT_POST));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_POST;
+      break;
+
+    case NSSM_GUI_HOOK_EVENT_POWER:
+      i = 0;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_POWER_CHANGE));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_CHANGE;
+      SendMessage(combo, CB_INSERTSTRING, i, (LPARAM) message_string(NSSM_GUI_HOOK_ACTION_POWER_RESUME));
+      if (action_index == i++) hook_action = NSSM_HOOK_ACTION_RESUME;
+      break;
+  }
+
+  SendMessage(combo, CB_SETCURSEL, action_index, 0);
+
+  TCHAR hook_name[HOOK_NAME_LENGTH];
+  hook_env(hook_event, hook_action, hook_name, _countof(hook_name));
+
+  if (! *hook_name) return;
+
+  TCHAR cmd[CMD_LENGTH];
+  if (changed) {
+    GetDlgItemText(tablist[NSSM_TAB_HOOKS], IDC_HOOK, cmd, _countof(cmd));
+    SetEnvironmentVariable(hook_name, cmd);
+  }
+  else {
+    if (! GetEnvironmentVariable(hook_name, cmd, _countof(cmd))) cmd[0] = _T('\0');
+    SetDlgItemText(tablist[NSSM_TAB_HOOKS], IDC_HOOK, cmd);
+  }
+}
+
+static inline int update_hook(TCHAR *service_name, const TCHAR *hook_event, const TCHAR *hook_action) {
+  TCHAR hook_name[HOOK_NAME_LENGTH];
+  if (hook_env(hook_event, hook_action, hook_name, _countof(hook_name)) < 0) return 1;
+  TCHAR cmd[CMD_LENGTH];
+  ZeroMemory(cmd, sizeof(cmd));
+  GetEnvironmentVariable(hook_name, cmd, _countof(cmd));
+  if (set_hook(service_name, hook_event, hook_action, cmd)) return 2;
+  return 0;
+}
+
+static inline int update_hooks(TCHAR *service_name) {
+  int ret = 0;
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_START, NSSM_HOOK_ACTION_PRE);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_START, NSSM_HOOK_ACTION_POST);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_STOP, NSSM_HOOK_ACTION_PRE);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_EXIT, NSSM_HOOK_ACTION_POST);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_POWER, NSSM_HOOK_ACTION_CHANGE);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_POWER, NSSM_HOOK_ACTION_RESUME);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_ROTATE, NSSM_HOOK_ACTION_PRE);
+  ret += update_hook(service_name, NSSM_HOOK_EVENT_ROTATE, NSSM_HOOK_ACTION_POST);
+  return ret;
 }
 
 static inline void check_io(HWND owner, TCHAR *name, TCHAR *buffer, unsigned long len, unsigned long control) {
@@ -351,9 +458,20 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
     service->username = 0;
     service->usernamelen = 0;
     if (service->password) {
-      SecureZeroMemory(service->password, service->passwordlen);
+      SecureZeroMemory(service->password, service->passwordlen * sizeof(TCHAR));
       HeapFree(GetProcessHeap(), 0, service->password);
     }
+    service->password = 0;
+    service->passwordlen = 0;
+  }
+  else if (SendDlgItemMessage(tablist[NSSM_TAB_LOGON], IDC_VIRTUAL_SERVICE, BM_GETCHECK, 0, 0) & BST_CHECKED) {
+    if (service->username) HeapFree(GetProcessHeap(), 0, service->username);
+    service->username = virtual_account(service->name);
+    if (! service->username) {
+      popup_message(window, MB_OK | MB_ICONEXCLAMATION, NSSM_EVENT_OUT_OF_MEMORY, _T("account name"), _T("install()"));
+      return 6;
+    }
+    service->usernamelen = _tcslen(service->username) + 1;
     service->password = 0;
     service->passwordlen = 0;
   }
@@ -440,7 +558,7 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
         /* Get first password. */
         if (! GetDlgItemText(tablist[NSSM_TAB_LOGON], IDC_PASSWORD1, service->password, (int) service->passwordlen)) {
           HeapFree(GetProcessHeap(), 0, password);
-          SecureZeroMemory(service->password, service->passwordlen);
+          SecureZeroMemory(service->password, service->passwordlen * sizeof(TCHAR));
           HeapFree(GetProcessHeap(), 0, service->password);
           service->password = 0;
           service->passwordlen = 0;
@@ -453,9 +571,9 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
 
         /* Get confirmation. */
         if (! GetDlgItemText(tablist[NSSM_TAB_LOGON], IDC_PASSWORD2, password, (int) service->passwordlen)) {
-          SecureZeroMemory(password, service->passwordlen);
+          SecureZeroMemory(password, service->passwordlen * sizeof(TCHAR));
           HeapFree(GetProcessHeap(), 0, password);
-          SecureZeroMemory(service->password, service->passwordlen);
+          SecureZeroMemory(service->password, service->passwordlen * sizeof(TCHAR));
           HeapFree(GetProcessHeap(), 0, service->password);
           service->password = 0;
           service->passwordlen = 0;
@@ -469,9 +587,9 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
         /* Compare. */
         if (_tcsncmp(password, service->password, service->passwordlen)) {
           popup_message(window, MB_OK | MB_ICONEXCLAMATION, NSSM_GUI_MISSING_PASSWORD);
-          SecureZeroMemory(password, service->passwordlen);
+          SecureZeroMemory(password, service->passwordlen * sizeof(TCHAR));
           HeapFree(GetProcessHeap(), 0, password);
-          SecureZeroMemory(service->password, service->passwordlen);
+          SecureZeroMemory(service->password, service->passwordlen * sizeof(TCHAR));
           HeapFree(GetProcessHeap(), 0, service->password);
           service->password = 0;
           service->passwordlen = 0;
@@ -545,6 +663,8 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
   check_number(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_CONSOLE, &service->kill_console_delay);
   check_number(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_WINDOW, &service->kill_window_delay);
   check_number(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_THREADS, &service->kill_threads_delay);
+  if (SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_PROCESS_TREE, BM_GETCHECK, 0, 0) & BST_CHECKED) service->kill_process_tree = 1;
+  else service->kill_process_tree = 0;
 
   /* Get exit action stuff. */
   check_number(tablist[NSSM_TAB_EXIT], IDC_THROTTLE, &service->throttle_delay);
@@ -557,6 +677,8 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
   check_io(window, _T("stdin"), service->stdin_path, _countof(service->stdin_path), IDC_STDIN);
   check_io(window, _T("stdout"), service->stdout_path, _countof(service->stdout_path), IDC_STDOUT);
   check_io(window, _T("stderr"), service->stderr_path, _countof(service->stderr_path), IDC_STDERR);
+  if (SendDlgItemMessage(tablist[NSSM_TAB_IO], IDC_TIMESTAMP, BM_GETCHECK, 0, 0) & BST_CHECKED) service->timestamp_log = true;
+  else service->timestamp_log = false;
 
   /* Override stdout and/or stderr. */
   if (SendDlgItemMessage(tablist[NSSM_TAB_ROTATION], IDC_TRUNCATE, BM_GETCHECK, 0, 0) & BST_CHECKED) {
@@ -571,6 +693,9 @@ int configure(HWND window, nssm_service_t *service, nssm_service_t *orig_service
     check_number(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_SECONDS, &service->rotate_seconds);
     check_number(tablist[NSSM_TAB_ROTATION], IDC_ROTATE_BYTES_LOW, &service->rotate_bytes_low);
   }
+
+  /* Get hook stuff. */
+  if (SendDlgItemMessage(tablist[NSSM_TAB_HOOKS], IDC_REDIRECT_HOOK, BM_GETCHECK, 0, 0) & BST_CHECKED) service->hook_share_output_handles = true;
 
   /* Get environment. */
   unsigned long envlen = (unsigned long) SendMessage(GetDlgItem(tablist[NSSM_TAB_ENVIRONMENT], IDC_ENVIRONMENT), WM_GETTEXTLENGTH, 0, 0);
@@ -666,6 +791,8 @@ int install(HWND window) {
       return 6;
   }
 
+  update_hooks(service->name);
+
   popup_message(window, MB_OK, NSSM_MESSAGE_SERVICE_INSTALLED, service->name);
   cleanup_nssm_service(service);
   return 0;
@@ -705,8 +832,8 @@ int remove(HWND window) {
 
     case 3:
       popup_message(window, MB_OK | MB_ICONEXCLAMATION, NSSM_GUI_SERVICE_NOT_INSTALLED);
-      return 3;
       cleanup_nssm_service(service);
+      return 3;
 
     case 4:
       popup_message(window, MB_OK | MB_ICONEXCLAMATION, NSSM_GUI_REMOVE_SERVICE_FAILED);
@@ -750,6 +877,8 @@ int edit(HWND window, nssm_service_t *orig_service) {
       cleanup_nssm_service(service);
       return 6;
   }
+
+  update_hooks(service->name);
 
   popup_message(window, MB_OK, NSSM_MESSAGE_SERVICE_EDITED, service->name);
   cleanup_nssm_service(service);
@@ -795,7 +924,7 @@ void browse(HWND window, TCHAR *current, unsigned long flags, ...) {
     va_start(arg, flags);
     while (i = va_arg(arg, int)) {
       TCHAR *localised = message_string(i);
-      _sntprintf_s((TCHAR *) ofn.lpstrFilter + len, bufsize, _TRUNCATE, localised);
+      _sntprintf_s((TCHAR *) ofn.lpstrFilter + len, bufsize - len, _TRUNCATE, localised);
       len += _tcslen(localised) + 1;
       LocalFree(localised);
       TCHAR *filter = browse_filter(i);
@@ -864,11 +993,15 @@ INT_PTR CALLBACK tab_dlg(HWND tab, UINT message, WPARAM w, LPARAM l) {
 
         /* Log on. */
         case IDC_LOCALSYSTEM:
-          set_logon_enabled(0);
+          set_logon_enabled(1, 0);
+          break;
+
+        case IDC_VIRTUAL_SERVICE:
+          set_logon_enabled(0, 0);
           break;
 
         case IDC_ACCOUNT:
-          set_logon_enabled(1);
+          set_logon_enabled(0, 1);
           break;
 
         /* Affinity. */
@@ -923,6 +1056,28 @@ INT_PTR CALLBACK tab_dlg(HWND tab, UINT message, WPARAM w, LPARAM l) {
           if (SendDlgItemMessage(tab, LOWORD(w), BM_GETCHECK, 0, 0) & BST_CHECKED) enabled = 1;
           else enabled = 0;
           set_rotation_enabled(enabled);
+          break;
+
+        /* Hook event. */
+        case IDC_HOOK_EVENT:
+          if (HIWORD(w) == CBN_SELCHANGE) set_hook_tab((int) SendMessage(GetDlgItem(tab, IDC_HOOK_EVENT), CB_GETCURSEL, 0, 0), 0, false);
+          break;
+
+        /* Hook action. */
+        case IDC_HOOK_ACTION:
+          if (HIWORD(w) == CBN_SELCHANGE) set_hook_tab((int) SendMessage(GetDlgItem(tab, IDC_HOOK_EVENT), CB_GETCURSEL, 0, 0), (int) SendMessage(GetDlgItem(tab, IDC_HOOK_ACTION), CB_GETCURSEL, 0, 0), false);
+          break;
+
+        /* Browse for hook. */
+        case IDC_BROWSE_HOOK:
+          dlg = GetDlgItem(tab, IDC_HOOK);
+          GetDlgItemText(tab, IDC_HOOK, buffer, _countof(buffer));
+          browse(dlg, _T(""), OFN_FILEMUSTEXIST, NSSM_GUI_BROWSE_FILTER_ALL_FILES, 0);
+          break;
+
+        /* Hook. */
+        case IDC_HOOK:
+          set_hook_tab((int) SendMessage(GetDlgItem(tab, IDC_HOOK_EVENT), CB_GETCURSEL, 0, 0), (int) SendMessage(GetDlgItem(tab, IDC_HOOK_ACTION), CB_GETCURSEL, 0, 0), true);
           break;
       }
       return 1;
@@ -993,7 +1148,7 @@ INT_PTR CALLBACK nssm_dlg(HWND window, UINT message, WPARAM w, LPARAM l) {
 
       /* Set defaults. */
       CheckRadioButton(tablist[NSSM_TAB_LOGON], IDC_LOCALSYSTEM, IDC_ACCOUNT, IDC_LOCALSYSTEM);
-      set_logon_enabled(0);
+      set_logon_enabled(1, 0);
 
       /* Dependencies tab. */
       tab.pszText = message_string(NSSM_GUI_TAB_DEPENDENCIES);
@@ -1070,6 +1225,7 @@ INT_PTR CALLBACK nssm_dlg(HWND window, UINT message, WPARAM w, LPARAM l) {
       SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_METHOD_THREADS, BM_SETCHECK, BST_CHECKED, 0);
       SetDlgItemInt(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_THREADS, NSSM_KILL_THREADS_GRACE_PERIOD, 0);
       SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_METHOD_TERMINATE, BM_SETCHECK, BST_CHECKED, 0);
+      SendDlgItemMessage(tablist[NSSM_TAB_SHUTDOWN], IDC_KILL_PROCESS_TREE, BM_SETCHECK, BST_CHECKED, 1);
 
       /* Restart tab. */
       tab.pszText = message_string(NSSM_GUI_TAB_EXIT);
@@ -1095,6 +1251,9 @@ INT_PTR CALLBACK nssm_dlg(HWND window, UINT message, WPARAM w, LPARAM l) {
       tablist[NSSM_TAB_IO] = dialog(MAKEINTRESOURCE(IDD_IO), window, tab_dlg);
       ShowWindow(tablist[NSSM_TAB_IO], SW_HIDE);
 
+      /* Set defaults. */
+      SendDlgItemMessage(tablist[NSSM_TAB_IO], IDC_TIMESTAMP, BM_SETCHECK, BST_UNCHECKED, 0);
+
       /* Rotation tab. */
       tab.pszText = message_string(NSSM_GUI_TAB_ROTATION);
       tab.cchTextMax = (int) _tcslen(tab.pszText) + 1;
@@ -1114,6 +1273,38 @@ INT_PTR CALLBACK nssm_dlg(HWND window, UINT message, WPARAM w, LPARAM l) {
       SendMessage(tabs, TCM_INSERTITEM, NSSM_TAB_ENVIRONMENT, (LPARAM) &tab);
       tablist[NSSM_TAB_ENVIRONMENT] = dialog(MAKEINTRESOURCE(IDD_ENVIRONMENT), window, tab_dlg);
       ShowWindow(tablist[NSSM_TAB_ENVIRONMENT], SW_HIDE);
+
+      /* Hooks tab. */
+      tab.pszText = message_string(NSSM_GUI_TAB_HOOKS);
+      tab.cchTextMax = (int) _tcslen(tab.pszText) + 1;
+      SendMessage(tabs, TCM_INSERTITEM, NSSM_TAB_HOOKS, (LPARAM) &tab);
+      tablist[NSSM_TAB_HOOKS] = dialog(MAKEINTRESOURCE(IDD_HOOKS), window, tab_dlg);
+      ShowWindow(tablist[NSSM_TAB_HOOKS], SW_HIDE);
+
+      /* Set defaults. */
+      combo = GetDlgItem(tablist[NSSM_TAB_HOOKS], IDC_HOOK_EVENT);
+      SendMessage(combo, CB_INSERTSTRING, -1, (LPARAM) message_string(NSSM_GUI_HOOK_EVENT_START));
+      SendMessage(combo, CB_INSERTSTRING, -1, (LPARAM) message_string(NSSM_GUI_HOOK_EVENT_STOP));
+      SendMessage(combo, CB_INSERTSTRING, -1, (LPARAM) message_string(NSSM_GUI_HOOK_EVENT_EXIT));
+      SendMessage(combo, CB_INSERTSTRING, -1, (LPARAM) message_string(NSSM_GUI_HOOK_EVENT_POWER));
+      SendMessage(combo, CB_INSERTSTRING, -1, (LPARAM) message_string(NSSM_GUI_HOOK_EVENT_ROTATE));
+      SendDlgItemMessage(tablist[NSSM_TAB_HOOKS], IDC_REDIRECT_HOOK, BM_SETCHECK, BST_UNCHECKED, 0);
+      if (_tcslen(service->name)) {
+        TCHAR hook_name[HOOK_NAME_LENGTH];
+        TCHAR cmd[CMD_LENGTH];
+        for (i = 0; hook_event_strings[i]; i++) {
+          const TCHAR *hook_event = hook_event_strings[i];
+          int j;
+          for (j = 0; hook_action_strings[j]; j++) {
+            const TCHAR *hook_action = hook_action_strings[j];
+            if (! valid_hook_name(hook_event, hook_action, true)) continue;
+            if (get_hook(service->name, hook_event, hook_action, cmd, sizeof(cmd))) continue;
+            if (hook_env(hook_event, hook_action, hook_name, _countof(hook_name)) < 0) continue;
+            SetEnvironmentVariable(hook_name, cmd);
+          }
+        }
+      }
+      set_hook_tab(0, 0, false);
 
       return 1;
 

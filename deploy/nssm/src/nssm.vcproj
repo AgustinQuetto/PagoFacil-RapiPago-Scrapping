@@ -78,7 +78,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="shlwapi.lib"
+				AdditionalDependencies="psapi.lib shlwapi.lib"
 				LinkIncremental="2"
 				SuppressStartupBanner="true"
 				GenerateDebugInformation="true"
@@ -173,7 +173,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="shlwapi.lib"
+				AdditionalDependencies="psapi.lib shlwapi.lib"
 				LinkIncremental="2"
 				SuppressStartupBanner="true"
 				GenerateDebugInformation="true"
@@ -267,7 +267,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="shlwapi.lib"
+				AdditionalDependencies="psapi.lib shlwapi.lib"
 				LinkIncremental="1"
 				SuppressStartupBanner="true"
 				ProgramDatabaseFile="$(OutDir)/$(ProjectName).pdb"
@@ -361,7 +361,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="shlwapi.lib"
+				AdditionalDependencies="psapi.lib shlwapi.lib"
 				LinkIncremental="1"
 				SuppressStartupBanner="true"
 				ProgramDatabaseFile="$(OutDir)/$(ProjectName).pdb"
@@ -485,6 +485,10 @@
 						PreprocessorDefinitions=""
 					/>
 				</FileConfiguration>
+			</File>
+			<File
+				RelativePath="hook.cpp"
+				>
 			</File>
 			<File
 				RelativePath="imports.cpp"
@@ -642,6 +646,10 @@
 				RelativePath="settings.cpp"
 				>
 			</File>
+			<File
+				RelativePath="utf8.cpp"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Header Files"
@@ -665,6 +673,10 @@
 			</File>
 			<File
 				RelativePath="gui.h"
+				>
+			</File>
+			<File
+				RelativePath="hook.h"
 				>
 			</File>
 			<File
@@ -693,6 +705,10 @@
 			</File>
 			<File
 				RelativePath="settings.h"
+				>
+			</File>
+			<File
+				RelativePath="utf8.h"
 				>
 			</File>
 		</Filter>
@@ -750,7 +766,7 @@
 				<Tool
 					Name="VCCustomBuildTool"
 					Description="Compiling messages"
-					CommandLine="mc -u -U $(InputName).mc -r . -h ."
+					CommandLine="mc -u -U $(InputName).mc -r . -h .&#x0D;&#x0A;"
 					Outputs="$(InputName).rc;$(InputName).h"
 				/>
 			</FileConfiguration>
@@ -760,7 +776,7 @@
 				<Tool
 					Name="VCCustomBuildTool"
 					Description="Compiling messages"
-					CommandLine="mc -u -U $(InputName).mc -r . -h ."
+					CommandLine="mc -u -U $(InputName).mc -r . -h .&#x0D;&#x0A;"
 					Outputs="$(InputName).rc;$(InputName).h"
 				/>
 			</FileConfiguration>
@@ -770,7 +786,7 @@
 				<Tool
 					Name="VCCustomBuildTool"
 					Description="Compiling messages"
-					CommandLine="mc -u -U $(InputName).mc -r . -h ."
+					CommandLine="mc -u -U $(InputName).mc -r . -h .&#x0D;&#x0A;"
 					AdditionalDependencies=""
 					Outputs="$(InputName).rc;$(InputName).h"
 				/>
@@ -781,7 +797,7 @@
 				<Tool
 					Name="VCCustomBuildTool"
 					Description="Compiling messages"
-					CommandLine="mc -u -U $(InputName).mc -r . -h ."
+					CommandLine="mc -u -U $(InputName).mc -r . -h .&#x0D;&#x0A;"
 					AdditionalDependencies=""
 					Outputs="$(InputName).rc;$(InputName).h"
 				/>

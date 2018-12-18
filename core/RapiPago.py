@@ -1,4 +1,4 @@
-import json, requests, geocoder, time
+import json, requests, time
 from bs4 import BeautifulSoup
 from utils import *
 
@@ -70,9 +70,10 @@ def getBranches(provinceId, localidadId, localidadName, extracash=False):
 def run():
     try:
         paths = {
-                    'localidades': 'localidades_Rapipago',
-                    'provincias': 'provincias_Rapipago',
-                    'sucursales': 'ArchivosCSV_Rapipago'
+                    'files': '..\Files',
+                    'localidades': '..\Files\localidades_Rapipago',
+                    'provincias': '..\Files\provincias_Rapipago',
+                    'sucursales': '..\Files\ArchivosCSV_Rapipago'
                 }
 
         for d in paths.keys():
@@ -97,6 +98,7 @@ def run():
         print(e)
 
 try:
+    print('RUNNING '+str(time.time()))
     start_time = time.time()
     run()
     elapsed_time = time.time() - start_time

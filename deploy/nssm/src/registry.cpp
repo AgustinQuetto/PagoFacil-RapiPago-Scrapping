@@ -2,6 +2,46 @@
 
 extern const TCHAR *exit_action_strings[];
 
+static int service_registry_path(const TCHAR *service_name, bool parameters, const TCHAR *sub, TCHAR *buffer, unsigned long buflen) {
+  int ret;
+
+  if (parameters) {
+    if (sub) ret = _sntprintf_s(buffer, buflen, _TRUNCATE, NSSM_REGISTRY _T("\\") NSSM_REG_PARAMETERS _T("\\%s"), service_name, sub);
+    else ret = _sntprintf_s(buffer, buflen, _TRUNCATE, NSSM_REGISTRY _T("\\") NSSM_REG_PARAMETERS, service_name);
+  }
+  else ret = _sntprintf_s(buffer, buflen, _TRUNCATE, NSSM_REGISTRY, service_name);
+
+  return ret;
+}
+
+static long open_registry_key(const TCHAR *registry, REGSAM sam, HKEY *key, bool must_exist) {
+  long error;
+
+  if (sam & KEY_SET_VALUE) {
+    error = RegCreateKeyEx(HKEY_LOCAL_MACHINE, registry, 0, 0, REG_OPTION_NON_VOLATILE, sam, 0, key, 0);
+    if (error != ERROR_SUCCESS) {
+      *key = 0;
+      log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OPENKEY_FAILED, registry, error_string(GetLastError()), 0);
+      return error;
+    }
+  }
+  else {
+    error = RegOpenKeyEx(HKEY_LOCAL_MACHINE, registry, 0, sam, key);
+    if (error != ERROR_SUCCESS) {
+      *key = 0;
+      if (error != ERROR_FILE_NOT_FOUND || must_exist) log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OPENKEY_FAILED, registry, error_string(GetLastError()), 0);
+    }
+  }
+
+  return error;
+}
+
+static HKEY open_registry_key(const TCHAR *registry, REGSAM sam, bool must_exist) {
+  HKEY key;
+  long error = open_registry_key(registry, sam, &key, must_exist);
+  return key;
+}
+
 int create_messages() {
   HKEY key;
 
@@ -17,8 +57,7 @@ int create_messages() {
   }
 
   /* Get path of this program */
-  TCHAR path[PATH_LENGTH];
-  GetModuleFileName(0, path, _countof(path));
+  const TCHAR *path = nssm_unquoted_imagepath();
 
   /* Try to register the module but don't worry so much on failure */
   RegSetValueEx(key, _T("EventMessageFile"), 0, REG_SZ, (const unsigned char *) path, (unsigned long) (_tcslen(path) +  1) * sizeof(TCHAR));
@@ -28,24 +67,36 @@ int create_messages() {
   return 0;
 }
 
+long enumerate_registry_values(HKEY key, unsigned long *index, TCHAR *name, unsigned long namelen) {
+  unsigned long type;
+  unsigned long datalen = namelen;
+  long error = RegEnumValue(key, *index, name, &datalen, 0, &type, 0, 0);
+  if (error == ERROR_SUCCESS) ++*index;
+  return error;
+}
+
 int create_parameters(nssm_service_t *service, bool editing) {
   /* Try to open the registry */
   HKEY key = open_registry(service->name, KEY_WRITE);
   if (! key) return 1;
 
+  /* Remember parameters in case we need to delete them. */
+  TCHAR registry[KEY_LENGTH];
+  int ret = service_registry_path(service->name, true, 0, registry, _countof(registry));
+
   /* Try to create the parameters */
   if (set_expand_string(key, NSSM_REG_EXE, service->exe)) {
-    RegDeleteKey(HKEY_LOCAL_MACHINE, NSSM_REGISTRY);
+    if (ret > 0) RegDeleteKey(HKEY_LOCAL_MACHINE, registry);
     RegCloseKey(key);
     return 2;
   }
   if (set_expand_string(key, NSSM_REG_FLAGS, service->flags)) {
-    RegDeleteKey(HKEY_LOCAL_MACHINE, NSSM_REGISTRY);
+    if (ret > 0) RegDeleteKey(HKEY_LOCAL_MACHINE, registry);
     RegCloseKey(key);
     return 3;
   }
   if (set_expand_string(key, NSSM_REG_DIR, service->dir)) {
-    RegDeleteKey(HKEY_LOCAL_MACHINE, NSSM_REGISTRY);
+    if (ret > 0) RegDeleteKey(HKEY_LOCAL_MACHINE, registry);
     RegCloseKey(key);
     return 4;
   }
@@ -79,6 +130,8 @@ int create_parameters(nssm_service_t *service, bool editing) {
   else if (editing) RegDeleteValue(key, NSSM_REG_KILL_WINDOW_GRACE_PERIOD);
   if (service->kill_threads_delay != NSSM_KILL_THREADS_GRACE_PERIOD) set_number(key, NSSM_REG_KILL_THREADS_GRACE_PERIOD, service->kill_threads_delay);
   else if (editing) RegDeleteValue(key, NSSM_REG_KILL_THREADS_GRACE_PERIOD);
+  if (! service->kill_process_tree) set_number(key, NSSM_REG_KILL_PROCESS_TREE, 0);
+  else if (editing) RegDeleteValue(key, NSSM_REG_KILL_PROCESS_TREE);
   if (service->stdin_path[0] || editing) {
     if (service->stdin_path[0]) set_expand_string(key, NSSM_REG_STDIN, service->stdin_path);
     else if (editing) RegDeleteValue(key, NSSM_REG_STDIN);
@@ -98,6 +151,8 @@ int create_parameters(nssm_service_t *service, bool editing) {
     else if (editing) delete_createfile_parameter(key, NSSM_REG_STDOUT, NSSM_REG_STDIO_DISPOSITION);
     if (service->stdout_flags != NSSM_STDOUT_FLAGS) set_createfile_parameter(key, NSSM_REG_STDOUT, NSSM_REG_STDIO_FLAGS, service->stdout_flags);
     else if (editing) delete_createfile_parameter(key, NSSM_REG_STDOUT, NSSM_REG_STDIO_FLAGS);
+    if (service->stdout_copy_and_truncate) set_createfile_parameter(key, NSSM_REG_STDOUT, NSSM_REG_STDIO_COPY_AND_TRUNCATE, 1);
+    else if (editing) delete_createfile_parameter(key, NSSM_REG_STDOUT, NSSM_REG_STDIO_COPY_AND_TRUNCATE);
   }
   if (service->stderr_path[0] || editing) {
     if (service->stderr_path[0]) set_expand_string(key, NSSM_REG_STDERR, service->stderr_path);
@@ -108,7 +163,13 @@ int create_parameters(nssm_service_t *service, bool editing) {
     else if (editing) delete_createfile_parameter(key, NSSM_REG_STDERR, NSSM_REG_STDIO_DISPOSITION);
     if (service->stderr_flags != NSSM_STDERR_FLAGS) set_createfile_parameter(key, NSSM_REG_STDERR, NSSM_REG_STDIO_FLAGS, service->stderr_flags);
     else if (editing) delete_createfile_parameter(key, NSSM_REG_STDERR, NSSM_REG_STDIO_FLAGS);
+    if (service->stderr_copy_and_truncate) set_createfile_parameter(key, NSSM_REG_STDERR, NSSM_REG_STDIO_COPY_AND_TRUNCATE, 1);
+    else if (editing) delete_createfile_parameter(key, NSSM_REG_STDERR, NSSM_REG_STDIO_COPY_AND_TRUNCATE);
   }
+  if (service->timestamp_log) set_number(key, NSSM_REG_TIMESTAMP_LOG, 1);
+  else if (editing) RegDeleteValue(key, NSSM_REG_TIMESTAMP_LOG);
+  if (service->hook_share_output_handles) set_number(key, NSSM_REG_HOOK_SHARE_OUTPUT_HANDLES, 1);
+  else if (editing) RegDeleteValue(key, NSSM_REG_HOOK_SHARE_OUTPUT_HANDLES);
   if (service->rotate_files) set_number(key, NSSM_REG_ROTATE, 1);
   else if (editing) RegDeleteValue(key, NSSM_REG_ROTATE);
   if (service->rotate_stdout_online) set_number(key, NSSM_REG_ROTATE_ONLINE, 1);
@@ -119,6 +180,8 @@ int create_parameters(nssm_service_t *service, bool editing) {
   else if (editing) RegDeleteValue(key, NSSM_REG_ROTATE_BYTES_LOW);
   if (service->rotate_bytes_high) set_number(key, NSSM_REG_ROTATE_BYTES_HIGH, service->rotate_bytes_high);
   else if (editing) RegDeleteValue(key, NSSM_REG_ROTATE_BYTES_HIGH);
+  if (service->rotate_delay != NSSM_ROTATE_DELAY) set_number(key, NSSM_REG_ROTATE_DELAY, service->rotate_delay);
+  else if (editing) RegDeleteValue(key, NSSM_REG_ROTATE_DELAY);
   if (service->no_console) set_number(key, NSSM_REG_NO_CONSOLE, 1);
   else if (editing) RegDeleteValue(key, NSSM_REG_NO_CONSOLE);
 
@@ -145,7 +208,7 @@ int create_parameters(nssm_service_t *service, bool editing) {
 int create_exit_action(TCHAR *service_name, const TCHAR *action_string, bool editing) {
   /* Get registry */
   TCHAR registry[KEY_LENGTH];
-  if (_sntprintf_s(registry, _countof(registry), _TRUNCATE, NSSM_REGISTRY _T("\\%s"), service_name, NSSM_REG_EXIT) < 0) {
+  if (service_registry_path(service_name, true, NSSM_REG_EXIT, registry, _countof(registry)) < 0) {
     log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("NSSM_REG_EXIT"), _T("create_exit_action()"), 0);
     return 1;
   }
@@ -179,47 +242,52 @@ int create_exit_action(TCHAR *service_name, const TCHAR *action_string, bool edi
 
 int get_environment(TCHAR *service_name, HKEY key, TCHAR *value, TCHAR **env, unsigned long *envlen) {
   unsigned long type = REG_MULTI_SZ;
+  unsigned long envsize;
+
+  *envlen = 0;
 
   /* Dummy test to find buffer size */
-  unsigned long ret = RegQueryValueEx(key, value, 0, &type, NULL, envlen);
+  unsigned long ret = RegQueryValueEx(key, value, 0, &type, NULL, &envsize);
   if (ret != ERROR_SUCCESS) {
     *env = 0;
-    *envlen = 0;
     /* The service probably doesn't have any environment configured */
     if (ret == ERROR_FILE_NOT_FOUND) return 0;
-    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(GetLastError()), 0);
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(ret), 0);
     return 1;
   }
 
   if (type != REG_MULTI_SZ) {
-    *env = 0;
-    *envlen = 0;
     log_event(EVENTLOG_WARNING_TYPE, NSSM_EVENT_INVALID_ENVIRONMENT_STRING_TYPE, value, service_name, 0);
+    *env = 0;
     return 2;
   }
 
-  /* Probably not possible */
-  if (! *envlen) return 0;
+  /* Minimum usable environment would be A= NULL NULL. */
+  if (envsize < 4 * sizeof(TCHAR)) {
+    *env = 0;
+    return 3;
+  }
 
   /* Previously initialised? */
   if (*env) HeapFree(GetProcessHeap(), 0, *env);
 
-  *env = (TCHAR *) HeapAlloc(GetProcessHeap(), 0, *envlen);
+  *env = (TCHAR *) HeapAlloc(GetProcessHeap(), 0, envsize);
   if (! *env) {
-    *envlen = 0;
     log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, value, _T("get_environment()"), 0);
-    return 3;
-  }
-
-  /* Actually get the strings */
-  ret = RegQueryValueEx(key, value, 0, &type, (unsigned char *) *env, envlen);
-  if (ret != ERROR_SUCCESS) {
-    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(GetLastError()), 0);
-    HeapFree(GetProcessHeap(), 0, *env);
-    *env = 0;
-    *envlen = 0;
     return 4;
   }
+
+  /* Actually get the strings. */
+  ret = RegQueryValueEx(key, value, 0, &type, (unsigned char *) *env, &envsize);
+  if (ret != ERROR_SUCCESS) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(ret), 0);
+    HeapFree(GetProcessHeap(), 0, *env);
+    *env = 0;
+    return 5;
+  }
+
+  /* Value retrieved by RegQueryValueEx() is SIZE not COUNT. */
+  *envlen = (unsigned long) environment_length(*env);
 
   return 0;
 }
@@ -239,14 +307,13 @@ int get_string(HKEY key, TCHAR *value, TCHAR *data, unsigned long datalen, bool 
 
   unsigned long ret = RegQueryValueEx(key, value, 0, &type, (unsigned char *) buffer, &buflen);
   if (ret != ERROR_SUCCESS) {
-    unsigned long error = GetLastError();
     HeapFree(GetProcessHeap(), 0, buffer);
 
     if (ret == ERROR_FILE_NOT_FOUND) {
       if (! must_exist) return 0;
     }
 
-    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(error), 0);
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(ret), 0);
     return 2;
   }
 
@@ -302,12 +369,10 @@ int set_string(HKEY key, TCHAR *value, TCHAR *string, bool expand) {
 
 int set_string(HKEY key, TCHAR *value, TCHAR *string) {
   return set_string(key, value, string, false);
-  return 1;
 }
 
 int set_expand_string(HKEY key, TCHAR *value, TCHAR *string) {
   return set_string(key, value, string, true);
-  return 1;
 }
 
 /*
@@ -339,7 +404,7 @@ int get_number(HKEY key, TCHAR *value, unsigned long *number, bool must_exist) {
     if (! must_exist) return 0;
   }
 
-  log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(GetLastError()), 0);
+  log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(ret), 0);
   if (ret == ERROR_FILE_NOT_FOUND) return -1;
 
   return -2;
@@ -381,32 +446,40 @@ int format_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **formatted, unsign
   return 0;
 }
 
-/* Strip CR and replace LF with NULL. */
-int unformat_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **unformatted, unsigned long *newlen) {
+/* Strip CR and replace LF with NULL.  */
+int unformat_double_null(TCHAR *formatted, unsigned long formattedlen, TCHAR **dn, unsigned long *newlen) {
   unsigned long i, j;
   *newlen = 0;
 
-  if (! dnlen) {
-    *unformatted = 0;
+  /* Don't count trailing NULLs. */
+  for (i = 0; i < formattedlen; i++) {
+    if (! formatted[i]) {
+      formattedlen = i;
+      break;
+    }
+  }
+
+  if (! formattedlen) {
+    *dn = 0;
     return 0;
   }
 
-  for (i = 0; i < dnlen; i++) if (dn[i] != _T('\r')) ++*newlen;
+  for (i = 0; i < formattedlen; i++) if (formatted[i] != _T('\r')) ++*newlen;
 
   /* Skip blank lines. */
-  for (i = 0; i < dnlen; i++) {
-    if (dn[i] == _T('\r') && dn[i + 1] == _T('\n')) {
+  for (i = 0; i < formattedlen; i++) {
+    if (formatted[i] == _T('\r') && formatted[i + 1] == _T('\n')) {
       /* This is the last CRLF. */
-      if (i >= dnlen - 2) break;
+      if (i >= formattedlen - 2) break;
 
       /*
         Strip at the start of the block or if the next characters are
         CRLF too.
       */
-      if (! i || (dn[i + 2] == _T('\r') && dn[i + 3] == _T('\n'))) {
-        for (j = i + 2; j < dnlen; j++) dn[j - 2] = dn[j];
-        dn[dnlen--] = _T('\0');
-        dn[dnlen--] = _T('\0');
+      if (! i || (formatted[i + 2] == _T('\r') && formatted[i + 3] == _T('\n'))) {
+        for (j = i + 2; j < formattedlen; j++) formatted[j - 2] = formatted[j];
+        formatted[formattedlen--] = _T('\0');
+        formatted[formattedlen--] = _T('\0');
         i--;
         --*newlen;
       }
@@ -416,16 +489,163 @@ int unformat_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **unformatted, un
   /* Must end with two NULLs. */
   *newlen += 2;
 
-  *unformatted = (TCHAR *) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, *newlen * sizeof(TCHAR));
-  if (! *unformatted) return 1;
+  *dn = (TCHAR *) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, *newlen * sizeof(TCHAR));
+  if (! *dn) return 1;
 
-  for (i = 0, j = 0; i < dnlen; i++) {
-    if (dn[i] == _T('\r')) continue;
-    if (dn[i] == _T('\n')) (*unformatted)[j] = _T('\0');
-    else (*unformatted)[j] = dn[i];
+  for (i = 0, j = 0; i < formattedlen; i++) {
+    if (formatted[i] == _T('\r')) continue;
+    if (formatted[i] == _T('\n')) (*dn)[j] = _T('\0');
+    else (*dn)[j] = formatted[i];
     j++;
   }
 
+  return 0;
+}
+
+/* Copy a block. */
+int copy_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **newdn) {
+  if (! newdn) return 1;
+
+  *newdn = 0;
+  if (! dn) return 0;
+
+  *newdn = (TCHAR *) HeapAlloc(GetProcessHeap(), 0, dnlen * sizeof(TCHAR));
+  if (! *newdn) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("dn"), _T("copy_double_null()"), 0);
+    return 2;
+  }
+
+  memmove(*newdn, dn, dnlen * sizeof(TCHAR));
+  return 0;
+}
+
+/*
+  Create a new block with all the strings of the first block plus a new string.
+  The new string may be specified as <key> <delimiter> <value> and the keylen
+  gives the offset into the string to compare against existing entries.
+  If the key is already present its value will be overwritten in place.
+  If the key is blank or empty the new block will still be allocated and have
+  non-zero length.
+*/
+int append_to_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **newdn, unsigned long *newlen, TCHAR *append, size_t keylen, bool case_sensitive) {
+  if (! append || ! append[0]) return copy_double_null(dn, dnlen, newdn);
+  size_t appendlen = _tcslen(append);
+  int (*fn)(const TCHAR *, const TCHAR *, size_t) = (case_sensitive) ? _tcsncmp : _tcsnicmp;
+
+  /* Identify the key, if any, or treat the whole string as the key. */
+  TCHAR *key = 0;
+  if (! keylen || keylen > appendlen) keylen = appendlen;
+  key = (TCHAR *) HeapAlloc(GetProcessHeap(), 0, (keylen + 1) * sizeof(TCHAR));
+  if (! key) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("key"), _T("append_to_double_null()"), 0);
+    return 1;
+  }
+  memmove(key, append, keylen * sizeof(TCHAR));
+  key[keylen] = _T('\0');
+
+  /* Find the length of the block not including any existing key. */
+  size_t len = 0;
+  TCHAR *s;
+  for (s = dn; *s; s++) {
+    if (fn(s, key, keylen)) len += _tcslen(s) + 1;
+    for ( ; *s; s++);
+  }
+
+  /* Account for new entry. */
+  len += _tcslen(append) + 1;
+
+  /* Account for trailing NULL. */
+  len++;
+
+  /* Allocate a new block. */
+  *newdn = (TCHAR *) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len * sizeof(TCHAR));
+  if (! *newdn) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("newdn"), _T("append_to_double_null()"), 0);
+    HeapFree(GetProcessHeap(), 0, key);
+    return 2;
+  }
+
+  /* Copy existing entries.*/
+  *newlen = (unsigned long) len;
+  TCHAR *t = *newdn;
+  TCHAR *u;
+  bool replaced = false;
+  for (s = dn; *s; s++) {
+    if (fn(s, key, keylen)) u = s;
+    else {
+      u = append;
+      replaced = true;
+    }
+    len = _tcslen(u) + 1;
+    memmove(t, u, len * sizeof(TCHAR));
+    t += len;
+    for ( ; *s; s++);
+  }
+
+  /* Add the entry if it wasn't already replaced.  The buffer was zeroed. */
+  if (! replaced) memmove(t, append, _tcslen(append) * sizeof(TCHAR));
+
+  HeapFree(GetProcessHeap(), 0, key);
+  return 0;
+}
+
+/*
+  Create a new block with all the string of the first block minus the given
+  string.
+  The keylen parameter gives the offset into the string to compare against
+  existing entries.  If a substring of existing value matches the string to
+  the given length it will be removed.
+  If the last entry is removed the new block will still be allocated and
+  have non-zero length.
+*/
+int remove_from_double_null(TCHAR *dn, unsigned long dnlen, TCHAR **newdn, unsigned long *newlen, TCHAR *remove, size_t keylen, bool case_sensitive) {
+  if (! remove || !remove[0]) return copy_double_null(dn, dnlen, newdn);
+  size_t removelen = _tcslen(remove);
+  int (*fn)(const TCHAR *, const TCHAR *, size_t) = (case_sensitive) ? _tcsncmp : _tcsnicmp;
+
+  /* Identify the key, if any, or treat the whole string as the key. */
+  TCHAR *key = 0;
+  if (! keylen || keylen > removelen) keylen = removelen;
+  key = (TCHAR *) HeapAlloc(GetProcessHeap(), 0, (keylen + 1) * sizeof(TCHAR));
+  if (! key) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("key"), _T("remove_from_double_null()"), 0);
+    return 1;
+  }
+  memmove(key, remove, keylen * sizeof(TCHAR));
+  key[keylen] = _T('\0');
+
+  /* Find the length of the block not including any existing key. */
+  size_t len = 0;
+  TCHAR *s;
+  for (s = dn; *s; s++) {
+    if (fn(s, key, keylen)) len += _tcslen(s) + 1;
+    for ( ; *s; s++);
+  }
+
+  /* Account for trailing NULL. */
+  if (++len < 2) len = 2;
+
+  /* Allocate a new block. */
+  *newdn = (TCHAR *) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len * sizeof(TCHAR));
+  if (! *newdn) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("newdn"), _T("remove_from_double_null()"), 0);
+    HeapFree(GetProcessHeap(), 0, key);
+    return 2;
+  }
+
+  /* Copy existing entries.*/
+  *newlen = (unsigned long) len;
+  TCHAR *t = *newdn;
+  for (s = dn; *s; s++) {
+    if (fn(s, key, keylen)) {
+      len = _tcslen(s) + 1;
+      memmove(t, s, len * sizeof(TCHAR));
+      t += len;
+    }
+    for ( ; *s; s++);
+  }
+
+  HeapFree(GetProcessHeap(), 0, key);
   return 0;
 }
 
@@ -441,7 +661,7 @@ void override_milliseconds(TCHAR *service_name, HKEY key, TCHAR *value, unsigned
         _sntprintf_s(milliseconds, _countof(milliseconds), _TRUNCATE, _T("%lu"), default_value);
         log_event(EVENTLOG_WARNING_TYPE, event, service_name, value, milliseconds, 0);
       }
-      else log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(GetLastError()), 0);
+      else log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, value, error_string(ret), 0);
     }
   }
   else ok = true;
@@ -449,56 +669,61 @@ void override_milliseconds(TCHAR *service_name, HKEY key, TCHAR *value, unsigned
   if (! ok) *buffer = default_value;
 }
 
-HKEY open_registry(const TCHAR *service_name, const TCHAR *sub, REGSAM sam) {
+/* Open the key of the service itself Services\<service_name>. */
+HKEY open_service_registry(const TCHAR *service_name, REGSAM sam, bool must_exist) {
   /* Get registry */
   TCHAR registry[KEY_LENGTH];
-  HKEY key;
-  int ret;
-
-  if (sub) ret = _sntprintf_s(registry, _countof(registry), _TRUNCATE, NSSM_REGISTRY _T("\\%s"), service_name, sub);
-  else ret = _sntprintf_s(registry, _countof(registry), _TRUNCATE, NSSM_REGISTRY, service_name);
-  if (ret < 0) {
-    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("NSSM_REGISTRY"), _T("open_registry()"), 0);
+  if (service_registry_path(service_name, false, 0, registry, _countof(registry)) < 0) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, NSSM_REGISTRY, _T("open_service_registry()"), 0);
     return 0;
   }
 
-  if (sam & KEY_WRITE) {
-    if (RegCreateKeyEx(HKEY_LOCAL_MACHINE, registry, 0, 0, REG_OPTION_NON_VOLATILE, sam, 0, &key, 0) != ERROR_SUCCESS) {
-      log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OPENKEY_FAILED, registry, error_string(GetLastError()), 0);
-      return 0;
-    }
-  }
-  else {
-    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, registry, 0, sam, &key) != ERROR_SUCCESS) {
-      log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OPENKEY_FAILED, registry, error_string(GetLastError()), 0);
-      return 0;
-    }
+  return open_registry_key(registry, sam, must_exist);
+}
+
+/* Open a subkey of the service Services\<service_name>\<sub>. */
+long open_registry(const TCHAR *service_name, const TCHAR *sub, REGSAM sam, HKEY *key, bool must_exist) {
+  /* Get registry */
+  TCHAR registry[KEY_LENGTH];
+  if (service_registry_path(service_name, true, sub, registry, _countof(registry)) < 0) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, NSSM_REGISTRY, _T("open_registry()"), 0);
+    return 0;
   }
 
+  return open_registry_key(registry, sam, key, must_exist);
+}
+
+HKEY open_registry(const TCHAR *service_name, const TCHAR *sub, REGSAM sam, bool must_exist) {
+  HKEY key;
+  long error = open_registry(service_name, sub, sam, &key, must_exist);
   return key;
 }
 
+HKEY open_registry(const TCHAR *service_name, const TCHAR *sub, REGSAM sam) {
+  return open_registry(service_name, sub, sam, true);
+}
+
 HKEY open_registry(const TCHAR *service_name, REGSAM sam) {
-  return open_registry(service_name, 0, sam);
+  return open_registry(service_name, 0, sam, true);
 }
 
 int get_io_parameters(nssm_service_t *service, HKEY key) {
   /* stdin */
-  if (get_createfile_parameters(key, NSSM_REG_STDIN, service->stdin_path, &service->stdin_sharing, NSSM_STDIN_SHARING, &service->stdin_disposition, NSSM_STDIN_DISPOSITION, &service->stdin_flags, NSSM_STDIN_FLAGS)) {
+  if (get_createfile_parameters(key, NSSM_REG_STDIN, service->stdin_path, &service->stdin_sharing, NSSM_STDIN_SHARING, &service->stdin_disposition, NSSM_STDIN_DISPOSITION, &service->stdin_flags, NSSM_STDIN_FLAGS, 0)) {
     service->stdin_sharing = service->stdin_disposition = service->stdin_flags = 0;
     ZeroMemory(service->stdin_path, _countof(service->stdin_path) * sizeof(TCHAR));
     return 1;
   }
 
   /* stdout */
-  if (get_createfile_parameters(key, NSSM_REG_STDOUT, service->stdout_path, &service->stdout_sharing, NSSM_STDOUT_SHARING, &service->stdout_disposition, NSSM_STDOUT_DISPOSITION, &service->stdout_flags, NSSM_STDOUT_FLAGS)) {
+  if (get_createfile_parameters(key, NSSM_REG_STDOUT, service->stdout_path, &service->stdout_sharing, NSSM_STDOUT_SHARING, &service->stdout_disposition, NSSM_STDOUT_DISPOSITION, &service->stdout_flags, NSSM_STDOUT_FLAGS, &service->stdout_copy_and_truncate)) {
     service->stdout_sharing = service->stdout_disposition = service->stdout_flags = 0;
     ZeroMemory(service->stdout_path, _countof(service->stdout_path) * sizeof(TCHAR));
     return 2;
   }
 
   /* stderr */
-  if (get_createfile_parameters(key, NSSM_REG_STDERR, service->stderr_path, &service->stderr_sharing, NSSM_STDERR_SHARING, &service->stderr_disposition, NSSM_STDERR_DISPOSITION, &service->stderr_flags, NSSM_STDERR_FLAGS)) {
+  if (get_createfile_parameters(key, NSSM_REG_STDERR, service->stderr_path, &service->stderr_sharing, NSSM_STDERR_SHARING, &service->stderr_disposition, NSSM_STDERR_DISPOSITION, &service->stderr_flags, NSSM_STDERR_FLAGS, &service->stderr_copy_and_truncate)) {
     service->stderr_sharing = service->stderr_disposition = service->stderr_flags = 0;
     ZeroMemory(service->stderr_path, _countof(service->stderr_path) * sizeof(TCHAR));
     return 3;
@@ -516,6 +741,14 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
 
   /* Don't expand parameters when retrieving for the GUI. */
   bool expand = si ? true : false;
+
+  /* Try to get environment variables - may fail */
+  get_environment(service->name, key, NSSM_REG_ENV, &service->env, &service->envlen);
+  /* Environment variables to add to existing rather than replace - may fail. */
+  get_environment(service->name, key, NSSM_REG_ENV_EXTRA, &service->env_extra, &service->env_extralen);
+
+  /* Set environment if we are starting the service. */
+  if (si) set_service_environment(service);
 
   /* Try to get executable file - MUST succeed */
   if (get_string(key, NSSM_REG_EXE, service->exe, sizeof(service->exe), expand, false, true)) {
@@ -571,11 +804,6 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
     }
   }
 
-  /* Try to get environment variables - may fail */
-  get_environment(service->name, key, NSSM_REG_ENV, &service->env, &service->envlen);
-  /* Environment variables to add to existing rather than replace - may fail. */
-  get_environment(service->name, key, NSSM_REG_ENV_EXTRA, &service->env_extra, &service->env_extralen);
-
   /* Try to get priority - may fail. */
   unsigned long priority;
   if (get_number(key, NSSM_REG_PRIORITY, &priority, false) == 1) {
@@ -583,6 +811,13 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
     else log_event(EVENTLOG_WARNING_TYPE, NSSM_EVENT_BOGUS_PRIORITY, service->name, NSSM_REG_PRIORITY, 0);
   }
 
+  /* Try to get hook I/O sharing - may fail. */
+  unsigned long hook_share_output_handles;
+  if (get_number(key, NSSM_REG_HOOK_SHARE_OUTPUT_HANDLES, &hook_share_output_handles, false) == 1) {
+    if (hook_share_output_handles) service->hook_share_output_handles = true;
+    else service->hook_share_output_handles = false;
+  }
+  else hook_share_output_handles = false;
   /* Try to get file rotation settings - may fail. */
   unsigned long rotate_files;
   if (get_number(key, NSSM_REG_ROTATE, &rotate_files, false) == 1) {
@@ -595,9 +830,21 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
     else service->rotate_stdout_online = service->rotate_stderr_online = false;
   }
   else service->rotate_stdout_online = service->rotate_stderr_online = false;
+  /* Log timestamping requires a logging thread.*/
+  unsigned long timestamp_log;
+  if (get_number(key, NSSM_REG_TIMESTAMP_LOG, &timestamp_log, false) == 1) {
+    if (timestamp_log) service->timestamp_log = true;
+    else service->timestamp_log = false;
+  }
+  else service->timestamp_log = false;
+
+  /* Hook I/O sharing and online rotation need a pipe. */
+  service->use_stdout_pipe = service->rotate_stdout_online || service->timestamp_log || hook_share_output_handles;
+  service->use_stderr_pipe = service->rotate_stderr_online || service->timestamp_log || hook_share_output_handles;
   if (get_number(key, NSSM_REG_ROTATE_SECONDS, &service->rotate_seconds, false) != 1) service->rotate_seconds = 0;
   if (get_number(key, NSSM_REG_ROTATE_BYTES_LOW, &service->rotate_bytes_low, false) != 1) service->rotate_bytes_low = 0;
   if (get_number(key, NSSM_REG_ROTATE_BYTES_HIGH, &service->rotate_bytes_high, false) != 1) service->rotate_bytes_high = 0;
+  override_milliseconds(service->name, key, NSSM_REG_ROTATE_DELAY, &service->rotate_delay, NSSM_ROTATE_DELAY, NSSM_EVENT_BOGUS_THROTTLE);
 
   /* Try to get force new console setting - may fail. */
   if (get_number(key, NSSM_REG_NO_CONSOLE, &service->no_console, false) != 1) service->no_console = 0;
@@ -635,7 +882,7 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
       if (type != REG_DWORD) {
         log_event(EVENTLOG_WARNING_TYPE, NSSM_EVENT_BOGUS_STOP_METHOD_SKIP, service->name, NSSM_REG_STOP_METHOD_SKIP, NSSM, 0);
       }
-      else log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, NSSM_REG_STOP_METHOD_SKIP, error_string(GetLastError()), 0);
+      else log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_QUERYVALUE_FAILED, NSSM_REG_STOP_METHOD_SKIP, error_string(ret), 0);
     }
   }
   else stop_ok = true;
@@ -648,6 +895,14 @@ int get_parameters(nssm_service_t *service, STARTUPINFO *si) {
   override_milliseconds(service->name, key, NSSM_REG_KILL_CONSOLE_GRACE_PERIOD, &service->kill_console_delay, NSSM_KILL_CONSOLE_GRACE_PERIOD, NSSM_EVENT_BOGUS_KILL_CONSOLE_GRACE_PERIOD);
   override_milliseconds(service->name, key, NSSM_REG_KILL_WINDOW_GRACE_PERIOD, &service->kill_window_delay, NSSM_KILL_WINDOW_GRACE_PERIOD, NSSM_EVENT_BOGUS_KILL_WINDOW_GRACE_PERIOD);
   override_milliseconds(service->name, key, NSSM_REG_KILL_THREADS_GRACE_PERIOD, &service->kill_threads_delay, NSSM_KILL_THREADS_GRACE_PERIOD, NSSM_EVENT_BOGUS_KILL_THREADS_GRACE_PERIOD);
+
+  /* Try to get process tree settings - may fail. */
+  unsigned long kill_process_tree;
+  if (get_number(key, NSSM_REG_KILL_PROCESS_TREE, &kill_process_tree, false) == 1) {
+    if (kill_process_tree) service->kill_process_tree = true;
+    else service->kill_process_tree = false;
+  }
+  else service->kill_process_tree = true;
 
   /* Try to get default exit action. */
   bool default_action;
@@ -711,4 +966,65 @@ int get_exit_action(const TCHAR *service_name, unsigned long *ret, TCHAR *action
   RegCloseKey(key);
 
   return 0;
+}
+
+int set_hook(const TCHAR *service_name, const TCHAR *hook_event, const TCHAR *hook_action, TCHAR *cmd) {
+  /* Try to open the registry */
+  TCHAR registry[KEY_LENGTH];
+  if (_sntprintf_s(registry, _countof(registry), _TRUNCATE, _T("%s\\%s"), NSSM_REG_HOOK, hook_event) < 0) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("hook registry"), _T("set_hook()"), 0);
+    return 1;
+  }
+
+  HKEY key;
+  long error;
+
+  /* Don't create keys needlessly. */
+  if (! _tcslen(cmd)) {
+    key = open_registry(service_name, registry, KEY_READ, false);
+    if (! key) return 0;
+    error = RegQueryValueEx(key, hook_action, 0, 0, 0, 0);
+    RegCloseKey(key);
+    if (error == ERROR_FILE_NOT_FOUND) return 0;
+  }
+
+  key = open_registry(service_name, registry, KEY_WRITE);
+  if (! key) return 1;
+
+  int ret = 1;
+  if (_tcslen(cmd)) ret = set_string(key, (TCHAR *) hook_action, cmd, true);
+  else {
+    error = RegDeleteValue(key, hook_action);
+    if (error == ERROR_SUCCESS || error == ERROR_FILE_NOT_FOUND) ret = 0;
+  }
+
+  /* Close registry */
+  RegCloseKey(key);
+
+  return ret;
+}
+
+int get_hook(const TCHAR *service_name, const TCHAR *hook_event, const TCHAR *hook_action, TCHAR *buffer, unsigned long buflen) {
+  /* Try to open the registry */
+  TCHAR registry[KEY_LENGTH];
+  if (_sntprintf_s(registry, _countof(registry), _TRUNCATE, _T("%s\\%s"), NSSM_REG_HOOK, hook_event) < 0) {
+    log_event(EVENTLOG_ERROR_TYPE, NSSM_EVENT_OUT_OF_MEMORY, _T("hook registry"), _T("get_hook()"), 0);
+    return 1;
+  }
+  HKEY key;
+  long error = open_registry(service_name, registry, KEY_READ, &key, false);
+  if (! key) {
+    if (error == ERROR_FILE_NOT_FOUND) {
+      ZeroMemory(buffer, buflen);
+      return 0;
+    }
+    return 1;
+  }
+
+  int ret = expand_parameter(key, (TCHAR *) hook_action, buffer, buflen, true, false);
+
+  /* Close registry */
+  RegCloseKey(key);
+
+  return ret;
 }
