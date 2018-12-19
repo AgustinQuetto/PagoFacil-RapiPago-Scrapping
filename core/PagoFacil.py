@@ -2,6 +2,20 @@ import json, requests, time
 from bs4 import BeautifulSoup
 from utils import *
 
+with open('pagofacil_paths.json') as json_data:
+    paths = json.load(json_data)
+
+toPendingFixCount = 0
+root = '../Files'
+provincesHeader = ['ID', 'PROVINCIA']
+localidadesHeader = ['ID', 'ID-PROVINCIA', 'LOCALIDAD']
+branchesHeader = ['IDSUCURSAL','NRO_AGENTE_PF','NOMBRE','DIRECCION','LOCALIDAD','PROVINCIA',
+                    'WESTERN_UNION','ENVIO_NACIONAL','PAGO_FACTURAS','RECARGA_FACIL',
+                    'HS_LAV','HS_SABADO','HS_DOMINGO','LATITUD','LONGITUD']
+dirs(root)
+for pd in paths.keys():
+    dirs(root+paths[pd])
+
 #solicita las provincias a rapipago y retorna una lista con todas
 def getProvinces():
     try:
@@ -52,30 +66,19 @@ def getLocation(provinceId, locationId):
 
 #funcion que se llama y contiene la ejecucion del programa
 def run():
-    paths = {
-                'files': '..\Files',
-                'localidades': '..\Files\localidades_PagoFacil',
-                'provincias': '..\Files\provincias_PagoFacil',
-                'sucursales': '..\Files\ArchivosCSV'
-            }
-
-    for d in paths.keys():
-        dirs(paths[d])
     provinces = getProvinces()
     if len(provinces) < 1:
         raise ValueError('No se obtuvieron provincias.')
-    toCSV(paths['provincias']+'/CodigoProvincias.csv', provinces, ['ID', 'PROVINCIA'])
+    toCSV(root+paths['provincias']+'/CodigoProvincias.csv', provinces, provincesHeader)
     for p in provinces:
         localidades = getLocalidades(p[0])
         if len(localidades) < 1:
             raise ValueError('No se obtuvieron localidades.')
-        toCSV(paths['localidades']+'/Localidad-'+p[1]+'.csv', localidades, ['ID', 'ID-PROVINCIA', 'LOCALIDAD'])
+        toCSV(root+paths['localidades']+'/Localidad-'+p[1]+'.csv', localidades, localidadesHeader)
         for l in localidades:
             location = getLocation(p[0], l[1])
-            toCSV(paths['sucursales']+'/Sucursales_'+p[1]+'_'+l[1]+'_PagoFacil.csv',
-                    location, ['IDSUCURSAL','NRO_AGENTE_PF','NOMBRE','DIRECCION','LOCALIDAD','PROVINCIA',
-                    'WESTERN_UNION','ENVIO_NACIONAL','PAGO_FACTURAS','RECARGA_FACIL',
-                    'HS_LAV','HS_SABADO','HS_DOMINGO','LATITUD','LONGITUD'])
+            toCSV(root+paths['sucursales']+'/Sucursales_'+p[1]+'_'+l[1]+'_PagoFacil.csv',
+                    location, branchesHeader)
 
 try:
     start_time = time.time()
